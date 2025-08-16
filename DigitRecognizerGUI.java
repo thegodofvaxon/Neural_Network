@@ -1,0 +1,190 @@
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.awt.image.BufferedImage;
+import java.util.Map;
+import java.util.Arrays;
+import java.util.Comparator;
+
+public class DigitRecognizerGUI extends JFrame {
+    private BufferedImage highResCanvas;
+    private int brushSize = 20;
+    private double[][] w1, w2, w3;
+    private double[] b1, b2, b3;
+    private JLabel predictionLabel;
+
+    public DigitRecognizerGUI() {
+        super("Digit Recognizer");
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setLayout(new BorderLayout());
+
+        highResCanvas = new BufferedImage(420, 420, BufferedImage.TYPE_BYTE_GRAY);
+        clearCanvas();
+
+        JPanel drawPanel = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                g.drawImage(highResCanvas, 0, 0, null);
+            }
+        };
+        
+        drawPanel.setPreferredSize(new Dimension(420, 420));
+        drawPanel.setBackground(Color.BLACK);
+
+        MouseAdapter drawAdapter = new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                drawAt(e.getX(), e.getY());
+                drawPanel.repaint();
+                updatePredictions();
+            }
+
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                drawAt(e.getX(), e.getY());
+                drawPanel.repaint();
+                updatePredictions();
+            }
+        };
+
+        drawPanel.addMouseListener(drawAdapter);
+        drawPanel.addMouseMotionListener(drawAdapter);
+
+        // Create prediction display
+        predictionLabel = new JLabel("<html>All Predictions (most to least probable):<br><br></html>");
+        predictionLabel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+
+        // Create main panel with drawing area and predictions
+        JPanel mainPanel = new JPanel(new BorderLayout());
+        mainPanel.add(drawPanel, BorderLayout.CENTER);
+        mainPanel.add(predictionLabel, BorderLayout.EAST);
+
+        // Add keyboard listener for 'c' key
+        drawPanel.setFocusable(true);
+        drawPanel.requestFocus();
+        drawPanel.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyChar() == 'c' || e.getKeyChar() == 'C') {
+                    clearCanvas();
+                    drawPanel.repaint();
+                    updatePredictions();
+                }
+            }
+        });
+
+        add(mainPanel, BorderLayout.CENTER);
+
+        // Load weights
+        try {
+            Object[] weights = DigitRecognizer.loadWeights("weights.dat");
+            w1 = (double[][]) weights[0]; b1 = (double[]) weights[1];
+            w2 = (double[][]) weights[2]; b2 = (double[]) weights[3];
+            w3 = (double[][]) weights[4]; b3 = (double[]) weights[5];
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this,
+                "Failed to load weights.dat. Train your model first!\\n" + ex.getMessage(),
+                "Error",
+                JOptionPane.ERROR_MESSAGE);
+            System.exit(1);
+        }
+
+        pack();
+        setResizable(false);
+        setLocationRelativeTo(null);
+    }
+
+    private void drawAt(int x, int y) {
+        Graphics2D g = highResCanvas.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(Color.WHITE);
+        g.fillOval(x - brushSize / 2, y - brushSize / 2, brushSize, brushSize);
+        g.dispose();
+    }
+
+    private void clearCanvas() {
+        Graphics2D g = highResCanvas.createGraphics();
+        g.setColor(Color.BLACK);
+        g.fillRect(0, 0, highResCanvas.getWidth(), highResCanvas.getHeight());
+        g.dispose();
+    }
+
+    private void updatePredictions() {
+        double[] input = getInputFromCanvas();
+        Map<String, Object> result = DigitRecognizer.forward(input, w1, b1, w2, b2, w3, b3, false);
+        double[] probs = DigitRecognizer.softmax((double[]) result.get("outputRaw"));
+
+        Integer[] indices = new Integer[probs.length];
+        for (int i = 0; i < probs.length; i++) indices[i] = i;
+        Arrays.sort(indices, Comparator.comparingDouble(i -> -probs[i]));
+
+        StringBuilder sb = new StringBuilder("<html>All Predictions (most to least probable):<br><br>");
+        for (int i = 0; i < probs.length; i++) {
+            int digit = indices[i];
+            String style = i == 0 ? "font-weight: bold;" : "";
+            sb.append("<span style='").append(style).append("'>")
+              .append(digit)
+              .append(" → ")
+              .append(String.format("%.2f", probs[digit] * 100))
+              .append("%</span><br>");
+        }
+        sb.append("</html>");
+
+        SwingUtilities.invokeLater(() -> predictionLabel.setText(sb.toString()));
+    }
+
+    private double[] getInputFromCanvas() {
+        BufferedImage small = new BufferedImage(28, 28, BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D g = small.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g.drawImage(highResCanvas, 0, 0, 28, 28, null);
+        g.dispose();
+
+        int minX = 28, minY = 28, maxX = 0, maxY = 0;
+        for (int y = 0; y < 28; y++) for (int x = 0; x < 28; x++) {
+            int rgb = small.getRGB(x, y) & 0xFF;
+            if (rgb > 10) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+
+        if (maxX < minX || maxY < minY) return new double[28*28];
+
+        int width = maxX - minX + 1;
+        int height = maxY - minY + 1;
+
+        int newW = width > height ? 20 : (int)Math.round((width*20.0)/height);
+        int newH = width > height ? (int)Math.round((height*20.0)/width) : 20;
+
+        BufferedImage cropped = small.getSubimage(minX, minY, width, height);
+        BufferedImage scaled = new BufferedImage(newW, newH, BufferedImage.TYPE_BYTE_GRAY);
+        g = scaled.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g.drawImage(cropped, 0, 0, newW, newH, null);
+        g.dispose();
+
+        BufferedImage centered = new BufferedImage(28, 28, BufferedImage.TYPE_BYTE_GRAY);
+        g = centered.createGraphics();
+        g.setColor(Color.BLACK);
+        g.fillRect(0, 0, 28, 28);
+        int xOffset = (28 - newW)/2;
+        int yOffset = (28 - newH)/2;
+        g.drawImage(scaled, xOffset, yOffset, null);
+        g.dispose();
+
+        double[] input = new double[28*28];
+        for(int y=0;y<28;y++) for(int x=0;x<28;x++){
+            int gray = centered.getRGB(x,y) & 0xFF;
+            input[y*28+x] = gray/255.0;
+        }
+        return input;
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> new DigitRecognizerGUI().setVisible(true));
+    }
+}
