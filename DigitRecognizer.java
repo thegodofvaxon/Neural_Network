@@ -276,10 +276,10 @@ import java.awt.event.*;
         for(int i=0;i<h2;i++) for(int j=0;j<outputSize;j++) w3[i][j]=rand.nextGaussian()*Math.sqrt(2.0/h2);
         for(int j=0;j<outputSize;j++) b3[j]=0;
 
-        List<double[]> trainInputs=loadInputs("Projects\\Data\\Neural Network\\CSV's\\train.csv",inputSize);
-        List<Integer> trainLabels=loadLabels("Projects\\Data\\Neural Network\\CSV's\\train.csv",inputSize);
-        List<double[]> testInputs=loadInputs("Projects\\Data\\Neural Network\\CSV's\\test.csv",inputSize);
-        List<Integer> testLabels=loadLabels("Projects\\Data\\Neural Network\\CSV's\\test.csv",inputSize);
+        List<double[]> trainInputs=loadInputs("C:\\Users\\danie\\Downloads\\Projects\\Data\\Neural Network\\CSV's\\train.csv",inputSize);
+        List<Integer> trainLabels=loadLabels("C:\\Users\\danie\\Downloads\\Projects\\Data\\Neural Network\\CSV's\\train.csv",inputSize);
+        List<double[]> testInputs=loadInputs("C:\\Users\\danie\\Downloads\\Projects\\Data\\Neural Network\\CSV's\\test.csv",inputSize);
+        List<Integer> testLabels=loadLabels("C:\\Users\\danie\\Downloads\\Projects\\Data\\Neural Network\\CSV's\\test.csv",inputSize);
 
         AccuracyVisualizer visualizer = new AccuracyVisualizer();
 
