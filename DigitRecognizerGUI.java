@@ -1,4 +1,3 @@
-// DigitRecognizerGUI.java
 import javax.swing.*;
 import javax.swing.BorderFactory;
 import java.awt.*;
@@ -12,15 +11,12 @@ public class DigitRecognizerGUI extends JFrame {
     private BufferedImage highResCanvas;
     private int brushSize = 20;
 
-    // CNN + Dense weights (matching DigitRecognizer.saveWeightsObj / loadWeightsObj)
-    private DigitRecognizer.ConvBlockAdvanced conv;
-    private double[][] W1, W2, W3;
+    // CNN + Dense weights
+    private DigitRecognizer.ConvBlock conv;
+    private double[][] w1, w2, w3;
     private double[] b1, b2, b3;
 
     private JLabel predictionLabel;
-
-    // adjust if your trainer saved a different filename
-    private static final String WEIGHTS_FILE = "weights.obj";
 
     public DigitRecognizerGUI() {
         super("Digit Recognizer");
@@ -57,16 +53,14 @@ public class DigitRecognizerGUI extends JFrame {
         drawPanel.addMouseListener(drawAdapter);
         drawPanel.addMouseMotionListener(drawAdapter);
 
-        // Prediction display (scrollable)
+        // Prediction display
         predictionLabel = new JLabel("<html>All Predictions (most to least probable):<br><br></html>");
         predictionLabel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-        JScrollPane scroll = new JScrollPane(predictionLabel);
-        scroll.setPreferredSize(new Dimension(240, 420));
 
         // Layout
         JPanel mainPanel = new JPanel(new BorderLayout());
         mainPanel.add(drawPanel, BorderLayout.CENTER);
-        mainPanel.add(scroll, BorderLayout.EAST);
+        mainPanel.add(new JScrollPane(predictionLabel), BorderLayout.EAST);
         add(mainPanel, BorderLayout.CENTER);
 
         // Keyboard: clear with 'c'
@@ -83,36 +77,27 @@ public class DigitRecognizerGUI extends JFrame {
             }
         });
 
-        // Load weights produced by the trainer (weights.obj)
+        // Load weights produced by the NEW CNN trainer:
+        // Order is: convK, convB, w1, b1, w2, b2, w3, b3
         try {
-            Object[] weights = DigitRecognizer.loadWeightsObj(WEIGHTS_FILE);
-            // Order: K1, B1, K2, B2, W1, b1, W2, b2, W3, b3
-            double[][][] K1 = (double[][][]) weights[0];
-            double[]  B1  = (double[])       weights[1];
-            double[][][] K2 = (double[][][]) weights[2];
-            double[]  B2  = (double[])       weights[3];
-            W1 = (double[][]) weights[4]; b1 = (double[]) weights[5];
-            W2 = (double[][]) weights[6]; b2 = (double[]) weights[7];
-            W3 = (double[][]) weights[8]; b3 = (double[]) weights[9];
+            Object[] weights = DigitRecognizer.loadWeights("weights.dat");
+            double[][][] convK = (double[][][]) weights[0];
+            double[] convB      = (double[])     weights[1];
+            w1 = (double[][]) weights[2]; b1 = (double[]) weights[3];
+            w2 = (double[][]) weights[4]; b2 = (double[]) weights[5];
+            w3 = (double[][]) weights[6]; b3 = (double[]) weights[7];
 
-            // Build a ConvBlockAdvanced with correct numbers of filters and inject weights
-            int numF1 = K1.length;
-            int numF2 = K2.length;
-            conv = new DigitRecognizer.ConvBlockAdvanced(numF1, numF2, new Random(0));
-
-            // Assign loaded kernels/biases into conv instance
-            // conv.K1, conv.B1, conv.K2, conv.B2 are package-visible in DigitRecognizer code
-            conv.K1 = K1;
-            conv.B1 = B1;
-            conv.K2 = K2;
-            conv.B2 = B2;
+            // Build a ConvBlock and inject loaded weights
+            conv = new DigitRecognizer.ConvBlock(convK.length, new Random(0));
+            // Assign loaded kernels/biases
+            conv.K = convK;   // package-visible in the same (default) package
+            conv.B = convB;
 
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this,
-                "Failed to load weights file '" + WEIGHTS_FILE + "'.\nMake sure the trainer saved that file in the working directory.\n\n" + ex.getMessage(),
+                "Failed to load weights.dat. Train your CNN model first!\n" + ex.getMessage(),
                 "Error",
                 JOptionPane.ERROR_MESSAGE);
-            ex.printStackTrace();
             System.exit(1);
         }
 
@@ -142,7 +127,7 @@ public class DigitRecognizerGUI extends JFrame {
         // --- CNN forward (no dropout) ---
         double[] convFeat = conv.forward(input);
         DigitRecognizer.DenseCache cache = DigitRecognizer.denseForward(
-                convFeat, W1, b1, W2, b2, W3, b3,
+                convFeat, w1, b1, w2, b2, w3, b3,
                 false,     // training = false
                 0.0,       // dropoutRate = 0
                 new Random(0));
@@ -174,7 +159,7 @@ public class DigitRecognizerGUI extends JFrame {
         g.drawImage(highResCanvas, 0, 0, 28, 28, null);
         g.dispose();
 
-        int minX = 28, minY = 28, maxX = -1, maxY = -1;
+        int minX = 28, minY = 28, maxX = 0, maxY = 0;
         for (int y = 0; y < 28; y++) for (int x = 0; x < 28; x++) {
             int gray = small.getRGB(x, y) & 0xFF;
             if (gray > 10) { // foreground threshold
@@ -185,16 +170,13 @@ public class DigitRecognizerGUI extends JFrame {
             }
         }
 
-        if (maxX < 0 || maxY < 0) return new double[28*28]; // empty
+        if (maxX < minX || maxY < minY) return new double[28*28]; // empty
 
         int width = maxX - minX + 1;
         int height = maxY - minY + 1;
 
         int newW = width > height ? 20 : (int)Math.round((width*20.0)/height);
         int newH = width > height ? (int)Math.round((height*20.0)/width) : 20;
-
-        if (newW < 1) newW = 1;
-        if (newH < 1) newH = 1;
 
         BufferedImage cropped = small.getSubimage(minX, minY, width, height);
         BufferedImage scaled = new BufferedImage(newW, newH, BufferedImage.TYPE_BYTE_GRAY);
