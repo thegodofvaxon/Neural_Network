@@ -1,17 +1,26 @@
+// DigitRecognizerGUI.java
 import javax.swing.*;
+import javax.swing.BorderFactory;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
-import java.util.Map;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Random;
 
 public class DigitRecognizerGUI extends JFrame {
     private BufferedImage highResCanvas;
     private int brushSize = 20;
-    private double[][] w1, w2, w3;
+
+    // CNN + Dense weights (matching DigitRecognizer.saveWeightsObj / loadWeightsObj)
+    private DigitRecognizer.ConvBlockAdvanced conv;
+    private double[][] W1, W2, W3;
     private double[] b1, b2, b3;
+
     private JLabel predictionLabel;
+
+    // adjust if your trainer saved a different filename
+    private static final String WEIGHTS_FILE = "weights.obj";
 
     public DigitRecognizerGUI() {
         super("Digit Recognizer");
@@ -28,7 +37,6 @@ public class DigitRecognizerGUI extends JFrame {
                 g.drawImage(highResCanvas, 0, 0, null);
             }
         };
-        
         drawPanel.setPreferredSize(new Dimension(420, 420));
         drawPanel.setBackground(Color.BLACK);
 
@@ -39,7 +47,6 @@ public class DigitRecognizerGUI extends JFrame {
                 drawPanel.repaint();
                 updatePredictions();
             }
-
             @Override
             public void mouseDragged(MouseEvent e) {
                 drawAt(e.getX(), e.getY());
@@ -47,20 +54,22 @@ public class DigitRecognizerGUI extends JFrame {
                 updatePredictions();
             }
         };
-
         drawPanel.addMouseListener(drawAdapter);
         drawPanel.addMouseMotionListener(drawAdapter);
 
-        // Create prediction display
+        // Prediction display (scrollable)
         predictionLabel = new JLabel("<html>All Predictions (most to least probable):<br><br></html>");
         predictionLabel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        JScrollPane scroll = new JScrollPane(predictionLabel);
+        scroll.setPreferredSize(new Dimension(240, 420));
 
-        // Create main panel with drawing area and predictions
+        // Layout
         JPanel mainPanel = new JPanel(new BorderLayout());
         mainPanel.add(drawPanel, BorderLayout.CENTER);
-        mainPanel.add(predictionLabel, BorderLayout.EAST);
+        mainPanel.add(scroll, BorderLayout.EAST);
+        add(mainPanel, BorderLayout.CENTER);
 
-        // Add keyboard listener for 'c' key
+        // Keyboard: clear with 'c'
         drawPanel.setFocusable(true);
         drawPanel.requestFocus();
         drawPanel.addKeyListener(new KeyAdapter() {
@@ -74,19 +83,36 @@ public class DigitRecognizerGUI extends JFrame {
             }
         });
 
-        add(mainPanel, BorderLayout.CENTER);
-
-        // Load weights
+        // Load weights produced by the trainer (weights.obj)
         try {
-            Object[] weights = DigitRecognizer.loadWeights("weights.dat");
-            w1 = (double[][]) weights[0]; b1 = (double[]) weights[1];
-            w2 = (double[][]) weights[2]; b2 = (double[]) weights[3];
-            w3 = (double[][]) weights[4]; b3 = (double[]) weights[5];
+            Object[] weights = DigitRecognizer.loadWeightsObj(WEIGHTS_FILE);
+            // Order: K1, B1, K2, B2, W1, b1, W2, b2, W3, b3
+            double[][][] K1 = (double[][][]) weights[0];
+            double[]  B1  = (double[])       weights[1];
+            double[][][] K2 = (double[][][]) weights[2];
+            double[]  B2  = (double[])       weights[3];
+            W1 = (double[][]) weights[4]; b1 = (double[]) weights[5];
+            W2 = (double[][]) weights[6]; b2 = (double[]) weights[7];
+            W3 = (double[][]) weights[8]; b3 = (double[]) weights[9];
+
+            // Build a ConvBlockAdvanced with correct numbers of filters and inject weights
+            int numF1 = K1.length;
+            int numF2 = K2.length;
+            conv = new DigitRecognizer.ConvBlockAdvanced(numF1, numF2, new Random(0));
+
+            // Assign loaded kernels/biases into conv instance
+            // conv.K1, conv.B1, conv.K2, conv.B2 are package-visible in DigitRecognizer code
+            conv.K1 = K1;
+            conv.B1 = B1;
+            conv.K2 = K2;
+            conv.B2 = B2;
+
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this,
-                "Failed to load weights.dat. Train your model first!\\n" + ex.getMessage(),
+                "Failed to load weights file '" + WEIGHTS_FILE + "'.\nMake sure the trainer saved that file in the working directory.\n\n" + ex.getMessage(),
                 "Error",
                 JOptionPane.ERROR_MESSAGE);
+            ex.printStackTrace();
             System.exit(1);
         }
 
@@ -111,23 +137,29 @@ public class DigitRecognizerGUI extends JFrame {
     }
 
     private void updatePredictions() {
-        double[] input = getInputFromCanvas();
-        Map<String, Object> result = DigitRecognizer.forward(input, w1, b1, w2, b2, w3, b3, false);
-        double[] probs = DigitRecognizer.softmax((double[]) result.get("outputRaw"));
+        double[] input = getInputFromCanvas(); // 28x28 normalized to [0,1]
 
-        Integer[] indices = new Integer[probs.length];
-        for (int i = 0; i < probs.length; i++) indices[i] = i;
-        Arrays.sort(indices, Comparator.comparingDouble(i -> -probs[i]));
+        // --- CNN forward (no dropout) ---
+        double[] convFeat = conv.forward(input);
+        DigitRecognizer.DenseCache cache = DigitRecognizer.denseForward(
+                convFeat, W1, b1, W2, b2, W3, b3,
+                false,     // training = false
+                0.0,       // dropoutRate = 0
+                new Random(0));
+
+        double[] probs = cache.out; // already softmaxed
+
+        Integer[] idx = new Integer[probs.length];
+        for (int i = 0; i < probs.length; i++) idx[i] = i;
+        Arrays.sort(idx, Comparator.comparingDouble(i -> -probs[i]));
 
         StringBuilder sb = new StringBuilder("<html>All Predictions (most to least probable):<br><br>");
-        for (int i = 0; i < probs.length; i++) {
-            int digit = indices[i];
-            String style = i == 0 ? "font-weight: bold;" : "";
+        for (int rank = 0; rank < probs.length; rank++) {
+            int d = idx[rank];
+            String style = rank == 0 ? "font-weight: bold;" : "";
             sb.append("<span style='").append(style).append("'>")
-              .append(digit)
-              .append(" → ")
-              .append(String.format("%.2f", probs[digit] * 100))
-              .append("%</span><br>");
+              .append(d).append(" → ")
+              .append(String.format("%.2f", probs[d]*100)).append("%</span><br>");
         }
         sb.append("</html>");
 
@@ -135,16 +167,17 @@ public class DigitRecognizerGUI extends JFrame {
     }
 
     private double[] getInputFromCanvas() {
+        // Downscale canvas -> 28x28, find bounding box, scale longest side to 20px, center in 28x28
         BufferedImage small = new BufferedImage(28, 28, BufferedImage.TYPE_BYTE_GRAY);
         Graphics2D g = small.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         g.drawImage(highResCanvas, 0, 0, 28, 28, null);
         g.dispose();
 
-        int minX = 28, minY = 28, maxX = 0, maxY = 0;
+        int minX = 28, minY = 28, maxX = -1, maxY = -1;
         for (int y = 0; y < 28; y++) for (int x = 0; x < 28; x++) {
-            int rgb = small.getRGB(x, y) & 0xFF;
-            if (rgb > 10) {
+            int gray = small.getRGB(x, y) & 0xFF;
+            if (gray > 10) { // foreground threshold
                 if (x < minX) minX = x;
                 if (x > maxX) maxX = x;
                 if (y < minY) minY = y;
@@ -152,13 +185,16 @@ public class DigitRecognizerGUI extends JFrame {
             }
         }
 
-        if (maxX < minX || maxY < minY) return new double[28*28];
+        if (maxX < 0 || maxY < 0) return new double[28*28]; // empty
 
         int width = maxX - minX + 1;
         int height = maxY - minY + 1;
 
         int newW = width > height ? 20 : (int)Math.round((width*20.0)/height);
         int newH = width > height ? (int)Math.round((height*20.0)/width) : 20;
+
+        if (newW < 1) newW = 1;
+        if (newH < 1) newH = 1;
 
         BufferedImage cropped = small.getSubimage(minX, minY, width, height);
         BufferedImage scaled = new BufferedImage(newW, newH, BufferedImage.TYPE_BYTE_GRAY);
@@ -177,9 +213,9 @@ public class DigitRecognizerGUI extends JFrame {
         g.dispose();
 
         double[] input = new double[28*28];
-        for(int y=0;y<28;y++) for(int x=0;x<28;x++){
-            int gray = centered.getRGB(x,y) & 0xFF;
-            input[y*28+x] = gray/255.0;
+        for (int y = 0; y < 28; y++) for (int x = 0; x < 28; x++) {
+            int gray = centered.getRGB(x, y) & 0xFF;
+            input[y*28 + x] = gray / 255.0;
         }
         return input;
     }
